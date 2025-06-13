@@ -41,11 +41,13 @@ class OutputValidationAgent(BaseSDLCAgent):
                 - output_type: Type of output to validate
                 - output_data: Data to validate
                 - original_requirements: Original requirements text
+                - retry_count: Number of retry attempts (optional)
         """
         try:
             output_type = input_data.get("output_type")
             output_data = input_data.get("output_data")
             original_requirements = input_data.get("original_requirements", "")
+            retry_count = input_data.get("retry_count", 0)
             
             if not output_type or not output_data:
                 raise ValueError("Missing required validation inputs")
@@ -57,10 +59,15 @@ class OutputValidationAgent(BaseSDLCAgent):
                 original_requirements
             )
             
+            # Determine if we need retry or human intervention
+            needs_retry = not validation_result and retry_count < 3
+            needs_human = not validation_result and retry_count >= 3
+            
             return {
                 "success": validation_result,
-                "needs_retry": False,  # Simplified - no retries
-                "needs_human": not validation_result,  # If validation fails, need human review
+                "needs_retry": needs_retry,
+                "needs_human": needs_human,
+                "retry_count": retry_count + 1 if needs_retry else retry_count,
                 "reason": validation_details["reason"],
                 "validation_details": validation_details
             }
@@ -96,33 +103,38 @@ class OutputValidationAgent(BaseSDLCAgent):
                 "acceptance_criteria_heading": {
                     "found": False,
                     "content": "",
-                    "line_number": None
+                    "line_number": None,
+                    "required": True
                 },
-                "stakeholders": {
+                "user_story": {
                     "found": False,
                     "content": "",
-                    "line_number": None
+                    "line_number": None,
+                    "required": True
                 },
-                "business_goals": {
-                    "found": False,
-                    "content": "",
-                    "line_number": None
-                },
-                "user_stories": {
+                "functional_criteria": {
                     "found": False,
                     "content": [],
                     "line_number": None,
-                    "format_valid": False
+                    "required": True
                 },
-                "story_criteria": {
+                "non_functional_criteria": {
                     "found": False,
                     "content": [],
-                    "line_number": None
+                    "line_number": None,
+                    "required": True
+                },
+                "validation_methods": {
+                    "found": False,
+                    "content": "",
+                    "line_number": None,
+                    "required": True
                 },
                 "open_questions": {
                     "found": False,
                     "content": "",
-                    "line_number": None
+                    "line_number": None,
+                    "required": True
                 }
             },
             "reason": "",
@@ -131,67 +143,111 @@ class OutputValidationAgent(BaseSDLCAgent):
 
         # Check each section
         lines = criteria.split('\n')
+        current_section = None
+        
         for i, line in enumerate(lines):
+            line = line.strip()
+            if not line:
+                continue
+                
             # Check Acceptance Criteria heading
-            if re.search(r'acceptance criteria', line.lower()):
+            if re.search(r'^#\s*acceptance criteria', line.lower()):
                 validation_details["sections"]["acceptance_criteria_heading"]["found"] = True
                 validation_details["sections"]["acceptance_criteria_heading"]["line_number"] = i + 1
+                validation_details["sections"]["acceptance_criteria_heading"]["content"] = line
+                current_section = "acceptance_criteria_heading"
 
-            # Check Stakeholders section
-            if re.search(r'^#+.*stakeholder|.*user.*role', line.lower()):
-                validation_details["sections"]["stakeholders"]["found"] = True
-                validation_details["sections"]["stakeholders"]["line_number"] = i + 1
+            # Check User Story section
+            elif re.search(r'^##\s*user story', line.lower()):
+                validation_details["sections"]["user_story"]["found"] = True
+                validation_details["sections"]["user_story"]["line_number"] = i + 1
+                current_section = "user_story"
+                # Get the story content
+                story_lines = []
+                j = i + 1
+                while j < len(lines) and not re.search(r'^##\s*', lines[j]):
+                    if lines[j].strip():
+                        story_lines.append(lines[j].strip())
+                    j += 1
+                validation_details["sections"]["user_story"]["content"] = "\n".join(story_lines)
 
-            # Check Business Goals
-            if re.search(r'^#+.*business.*goal|.*value|.*problem', line.lower()):
-                validation_details["sections"]["business_goals"]["found"] = True
-                validation_details["sections"]["business_goals"]["line_number"] = i + 1
+            # Check Functional Criteria section
+            elif re.search(r'^##\s*functional acceptance criteria', line.lower()):
+                validation_details["sections"]["functional_criteria"]["found"] = True
+                validation_details["sections"]["functional_criteria"]["line_number"] = i + 1
+                current_section = "functional_criteria"
+                # Get the criteria content
+                criteria_lines = []
+                j = i + 1
+                while j < len(lines) and not re.search(r'^##\s*', lines[j]):
+                    if lines[j].strip():
+                        criteria_lines.append(lines[j].strip())
+                    j += 1
+                validation_details["sections"]["functional_criteria"]["content"] = criteria_lines
 
-            # Check User Stories
-            if re.search(r'^#+.*user.*stor', line.lower()):
-                validation_details["sections"]["user_stories"]["found"] = True
-                validation_details["sections"]["user_stories"]["line_number"] = i + 1
-                # Check for proper user story format
-                stories = [l for l in lines[i+1:] if re.search(r'as a.*i want.*so that', l.lower())]
-                validation_details["sections"]["user_stories"]["content"] = stories
-                validation_details["sections"]["user_stories"]["format_valid"] = len(stories) > 0
+            # Check Non-Functional Criteria section
+            elif re.search(r'^##\s*non-functional acceptance criteria', line.lower()):
+                validation_details["sections"]["non_functional_criteria"]["found"] = True
+                validation_details["sections"]["non_functional_criteria"]["line_number"] = i + 1
+                current_section = "non_functional_criteria"
+                # Get the criteria content
+                criteria_lines = []
+                j = i + 1
+                while j < len(lines) and not re.search(r'^##\s*', lines[j]):
+                    if lines[j].strip():
+                        criteria_lines.append(lines[j].strip())
+                    j += 1
+                validation_details["sections"]["non_functional_criteria"]["content"] = criteria_lines
 
-            # Check Story Acceptance Criteria
-            if re.search(r'^#+.*acceptance.*criteria', line.lower()):
-                validation_details["sections"]["story_criteria"]["found"] = True
-                validation_details["sections"]["story_criteria"]["line_number"] = i + 1
+            # Check Validation Methods section
+            elif re.search(r'^##\s*validation methods', line.lower()):
+                validation_details["sections"]["validation_methods"]["found"] = True
+                validation_details["sections"]["validation_methods"]["line_number"] = i + 1
+                current_section = "validation_methods"
+                # Get the methods content
+                method_lines = []
+                j = i + 1
+                while j < len(lines) and not re.search(r'^##\s*', lines[j]):
+                    if lines[j].strip():
+                        method_lines.append(lines[j].strip())
+                    j += 1
+                validation_details["sections"]["validation_methods"]["content"] = "\n".join(method_lines)
 
-            # Check Open Questions/Risks
-            if re.search(r'^#+.*open.*question|.*risk', line.lower()):
+            # Check Open Questions section
+            elif re.search(r'^##\s*open questions', line.lower()):
                 validation_details["sections"]["open_questions"]["found"] = True
                 validation_details["sections"]["open_questions"]["line_number"] = i + 1
+                current_section = "open_questions"
+                # Get the questions content
+                question_lines = []
+                j = i + 1
+                while j < len(lines) and not re.search(r'^##\s*', lines[j]):
+                    if lines[j].strip():
+                        question_lines.append(lines[j].strip())
+                    j += 1
+                validation_details["sections"]["open_questions"]["content"] = "\n".join(question_lines)
 
-        # Collect failures
-        if not validation_details["sections"]["acceptance_criteria_heading"]["found"]:
-            validation_details["failures"].append("Missing 'Acceptance Criteria' heading")
-        
-        if not validation_details["sections"]["stakeholders"]["found"]:
-            validation_details["failures"].append("Missing 'Stakeholders & User Roles' section")
-        
-        if not validation_details["sections"]["business_goals"]["found"]:
-            validation_details["failures"].append("Missing 'Business Goals' section")
-        
-        if not validation_details["sections"]["user_stories"]["found"]:
-            validation_details["failures"].append("Missing 'User Stories' section")
+        # Collect failures with detailed information
+        for section_name, section_data in validation_details["sections"].items():
+            if section_data["required"] and not section_data["found"]:
+                validation_details["failures"].append({
+                    "section": section_name,
+                    "reason": f"Missing required section: {section_name}",
+                    "expected_format": f"## {section_name.replace('_', ' ').title()}"
+                })
+            elif section_data["found"] and not section_data["content"]:
+                validation_details["failures"].append({
+                    "section": section_name,
+                    "reason": f"Section {section_name} is empty",
+                    "line_number": section_data["line_number"]
+                })
 
-        
-        if not validation_details["sections"]["story_criteria"]["found"]:
-            validation_details["failures"].append("Missing 'Acceptance Criteria' for user stories")
-        
-        if not validation_details["sections"]["open_questions"]["found"]:
-            validation_details["failures"].append("Missing 'Open Questions/Risks' section")
-
-        # Set overall validation result
+        # Set overall validation result and reason
         is_valid = len(validation_details["failures"]) == 0
-        validation_details["reason"] = (
-            "Validation successful"
-            if is_valid
-            else "Validation failed:\n" + "\n".join(f"- {failure}" for failure in validation_details["failures"])
-        )
+        if not is_valid:
+            failure_reasons = [f["reason"] for f in validation_details["failures"]]
+            validation_details["reason"] = "Validation failed:\n" + "\n".join(f"- {reason}" for reason in failure_reasons)
+        else:
+            validation_details["reason"] = "Validation successful"
 
         return is_valid, validation_details 

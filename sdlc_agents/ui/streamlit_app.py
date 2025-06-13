@@ -7,15 +7,15 @@ from pathlib import Path
 from datetime import datetime
 import html
 import time
-from sdlc_agents.agents.analysis_prompt_executor import AnalysisPromptExecutor
+from sdlc_agents.agents.analysis_workflow import AnalysisWorkflow
 from sdlc_agents.agents.output_validation_agent import OutputValidationAgent
 from sdlc_agents.agents.human_intervention_agent import HumanInterventionAgent
 from sdlc_agents.config.config import config
 from sdlc_agents.utils.helpers import ensure_output_dir
 
 # Initialize session state
-if 'analysis_agent' not in st.session_state:
-    st.session_state.analysis_agent = AnalysisPromptExecutor()
+if 'analysis_workflow' not in st.session_state:
+    st.session_state.analysis_workflow = AnalysisWorkflow()
 if 'validation_agent' not in st.session_state:
     st.session_state.validation_agent = OutputValidationAgent()
 if 'human_agent' not in st.session_state:
@@ -47,34 +47,28 @@ def format_log_entry(log, show_cursor=False):
     agent = html.escape(log['agent'])
     action = html.escape(log['action'])
     details = html.escape(log.get('details', '')) if log.get('details') else ''
-    cursor = '<span class="cursor"></span>' if show_cursor else ''
+    
     if log.get('is_processing'):
-        details_html = f'''<div class="details">
-            {details}
-            <div class="processing">
-                <div class="spinner"></div>
-                Processing<span class="loading"></span>
-            </div>
-            {cursor}
-        </div>'''
-    else:
-        details_html = f'<div class="details">{details}{cursor}</div>' if details else ''
+        details = f"{details} [Processing...]"
+    
     return f'''<div class="log-entry">
         <span class="timestamp">[{timestamp}]</span> 
         <span class="agent">{agent}</span> » 
         <span class="action">{action}</span>
-        {details_html}
+        <div class="details">{details}</div>
     </div>'''
 
 def update_logs():
     """Update the log display."""
     if not st.session_state.log_placeholder:
         return
+        
     log_entries = []
-    for i, log in enumerate(st.session_state.agent_logs):
-        show_cursor = i == len(st.session_state.agent_logs) - 1 and log.get('is_processing')
-        log_entries.append(format_log_entry(log, show_cursor))
+    for log in st.session_state.agent_logs:
+        log_entries.append(format_log_entry(log))
+        
     log_content = '\n'.join(log_entries)
+    
     st.session_state.log_placeholder.markdown(
         f'<div class="terminal"><pre>{log_content}</pre></div>',
         unsafe_allow_html=True
@@ -141,7 +135,7 @@ def display_messages():
                             else:
                                 st.error(f"❌ Missing '{section_name}' section")
 
-async def process_requirements(requirements: str):
+async def process_requirements(requirements: str) -> None:
     """Process requirements through the analysis workflow."""
     try:
         # Clear previous messages and logs
@@ -164,112 +158,156 @@ async def process_requirements(requirements: str):
         await asyncio.sleep(0.5)
         
         add_log(
-            "Analysis Agent",
+            "Analysis Workflow",
             "Initializing",
-            "The Analysis Agent is loading language models and tools to understand your requirements."
+            "The Analysis Workflow is loading language models and tools to understand your requirements."
         )
         await asyncio.sleep(1)
         
         add_log(
-            "Analysis Agent",
+            "Analysis Workflow",
             "Processing requirements",
-            f"The agent is now carefully reading your requirements and extracting key information.\n\nPreview: {requirements[:100]}...\n\nLooking for user stories, acceptance criteria, technical constraints, and business rules.",
+            f"The workflow is now carefully reading your requirements and extracting key information.\n\nPreview: {requirements[:100]}...\n\nLooking for user stories, acceptance criteria, technical constraints, and business rules.",
             is_processing=True
         )
         
-        analysis_result = await st.session_state.analysis_agent.process({
-            "requirements": requirements
-        })
+        # Run the workflow
+        workflow = AnalysisWorkflow()
+        result = await workflow.run(requirements)
         
         # Update the processing log to remove loading animation
         st.session_state.agent_logs[-1]["is_processing"] = False
         
-        if not analysis_result["success"]:
+        if result.get("error_message"):
             add_log(
-                "Analysis Agent",
+                "Analysis Workflow",
                 "Analysis failed",
-                f"The Analysis Agent could not process your requirements. Reason: {analysis_result.get('error', 'Unknown error')}. Please review your input and try again."
+                f"The Analysis Workflow could not process your requirements. Reason: {result['error_message']}. Please review your input and try again."
             )
             add_message(
-                "Analysis Agent",
-                f"Analysis failed: {analysis_result.get('error', 'Unknown error')}",
+                "Analysis Workflow",
+                f"Analysis failed: {result['error_message']}",
                 "error"
             )
             return
-        
-        add_log(
-            "Analysis Agent",
-            "Analysis complete",
-            "The Analysis Agent has successfully generated a detailed acceptance criteria document based on your requirements."
-        )
-        await asyncio.sleep(0.5)
-        
-        add_message(
-            "Analysis Agent",
-            "Generated acceptance criteria:",
-            "success",
-            {"raw_output": analysis_result["acceptance_criteria"]}
-        )
-        
-        # Validation Phase
+            
+        # Show validation phase
         add_log(
             "Validation Agent",
             "Starting validation",
-            "The Validation Agent is now reviewing the generated acceptance criteria for completeness, clarity, and correctness."
-            ,
+            "Starting validation of acceptance criteria against template requirements:\n\n" +
+            "1. Checking for required sections:\n" +
+            "   - Acceptance Criteria heading\n" +
+            "   - User Story section\n" +
+            "   - Functional Criteria\n" +
+            "   - Non-Functional Criteria\n" +
+            "   - Validation Methods\n" +
+            "   - Open Questions\n\n" +
+            "2. Verifying content quality:\n" +
+            "   - Completeness of each section\n" +
+            "   - Clarity and specificity\n" +
+            "   - Traceability to requirements\n" +
+            "   - Testability of criteria",
             is_processing=True
         )
         
-        validation_result = await st.session_state.validation_agent.process({
-            "output_type": "acceptance_criteria",
-            "output_data": analysis_result["acceptance_criteria"],
-            "original_requirements": requirements
-        })
+        # Get validation details from result
+        validation_details = result.get("metadata", {}).get("validation_details", {})
         
-        # Update the processing log to remove loading animation
-        st.session_state.agent_logs[-1]["is_processing"] = False
-        
-        if not validation_result["success"]:
-            add_log(
-                "Validation Agent",
-                "Validation failed",
-                f"The Validation Agent found issues with the acceptance criteria: {validation_result.get('reason', 'Unknown reason')}. Please review the feedback and address the highlighted problems."
-            )
-            add_message(
-                "Validation Agent",
-                f"Validation failed. Please review the following issues:",
-                "error",
-                {"validation_details": validation_result.get("validation_details", {})}
-            )
-        else:
+        if result.get("success"):
             add_log(
                 "Validation Agent",
                 "Validation successful",
-                "The Validation Agent has confirmed that the acceptance criteria document meets all required standards and is ready for use."
+                "✅ All validation checks passed:\n\n" +
+                "1. Required sections are present and complete\n" +
+                "2. Content meets quality standards\n" +
+                "3. Criteria are clear and testable\n" +
+                "4. All sections are properly formatted"
             )
             add_message(
-                "Validation Agent",
-                "Validation successful! The acceptance criteria matches all template requirements.",
+                "Analysis Workflow",
+                "✅ Analysis completed successfully!",
                 "success",
-                {"validation_details": validation_result.get("validation_details", {})}
+                {
+                    "raw_output": result.get("acceptance_criteria", ""),
+                    "validation_details": validation_details
+                }
             )
+        else:
+            # Show validation failures
+            failures = validation_details.get("failures", [])
+            if failures:
+                failure_details = "\n".join([f"- {f}" for f in failures])
+                add_log(
+                    "Validation Agent",
+                    "Validation failed",
+                    f"❌ Found validation issues:\n\n{failure_details}\n\n" +
+                    "Please ensure all required sections are present and properly formatted."
+                )
+            else:
+                add_log(
+                    "Validation Agent",
+                    "Validation failed",
+                    "❌ The acceptance criteria does not meet template requirements.\n\n" +
+                    "Please check that all required sections are present and properly formatted."
+                )
+                
+            # Show retry or human intervention status
+            if result.get("needs_human"):
+                add_log(
+                    "Human Intervention",
+                    "Required",
+                    "⚠️ Maximum retries reached. Human intervention is needed to:\n\n" +
+                    "1. Review the current acceptance criteria\n" +
+                    "2. Identify missing or incorrect sections\n" +
+                    "3. Provide guidance for improvement"
+                )
+                add_message(
+                    "Analysis Workflow",
+                    "⚠️ Human intervention required",
+                    "warning",
+                    {
+                        "raw_output": result.get("acceptance_criteria", ""),
+                        "validation_details": validation_details
+                    }
+                )
+            else:
+                add_log(
+                    "Validation Agent",
+                    "Retrying",
+                    f"🔄 Attempt {result.get('retry_count', 1)} of 3\n\n" +
+                    "The system will attempt to improve the acceptance criteria based on validation feedback."
+                )
+                add_message(
+                    "Analysis Workflow",
+                    "🔄 Retrying analysis",
+                    "warning",
+                    {
+                        "raw_output": result.get("acceptance_criteria", ""),
+                        "validation_details": validation_details
+                    }
+                )
         
-        await asyncio.sleep(0.5)
+        # Final status
         add_log(
             "System",
-            "Processing complete",
-            "The analysis and validation process is complete. You may now review the results or start a new session."
+            "Workflow complete",
+            "The analysis workflow has finished processing."
         )
-        return analysis_result
-            
+        
     except Exception as e:
-        add_log("System", "Error", str(e))
+        add_log(
+            "System",
+            "Error",
+            f"An unexpected error occurred: {str(e)}"
+        )
         add_message(
             "System",
-            f"An error occurred: {str(e)}",
+            f"Error: {str(e)}",
             "error"
         )
-        return {"success": False, "error": str(e)}
+    finally:
+        st.session_state.processing = False
 
 def main():
     """Main Streamlit UI."""

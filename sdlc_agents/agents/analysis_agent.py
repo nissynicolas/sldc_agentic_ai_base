@@ -90,29 +90,89 @@ class AnalysisAgent(BaseSDLCAgent):
         Returns:
             Structured acceptance criteria
         """
-        # TODO: Implement LLM-based criteria generation
-        # This is a placeholder that will be implemented with actual LLM integration
-        criteria_template = f"""# Acceptance Criteria
+        try:
+            # Parse the requirements
+            sections = requirements.split("\n\n")
+            user_story = sections[0].strip()
+            
+            # Extract functional and non-functional requirements
+            functional_reqs = []
+            non_functional_reqs = []
+            current_section = None
+            
+            for section in sections[1:]:
+                section = section.strip()
+                if "Functional Requirements:" in section:
+                    current_section = "functional"
+                    continue
+                elif "Non-functional Requirements:" in section:
+                    current_section = "non-functional"
+                    continue
+                    
+                if current_section == "functional" and section:
+                    functional_reqs.append(section)
+                elif current_section == "non-functional" and section:
+                    non_functional_reqs.append(section)
+            
+            # Generate acceptance criteria structure
+            criteria = f"""# Acceptance Criteria
 
-## Requirements Overview
-{requirements}
+## User Story
+{user_story}
 
-## Functional Criteria
-1. System must...
-2. Users should be able to...
-3. The interface must provide...
+## Functional Acceptance Criteria
 
-## Non-Functional Criteria
-1. Performance requirements...
-2. Security requirements...
-3. Reliability requirements...
+### Core Functionality
+Given the application requirements
+When implementing the core features
+Then the system should:
+{self._format_requirements(functional_reqs)}
+
+## Non-Functional Acceptance Criteria
+
+### System Requirements
+Given the non-functional requirements
+When implementing the system
+Then it should meet the following criteria:
+{self._format_requirements(non_functional_reqs)}
 
 ## Validation Methods
-1. Test cases for...
-2. Integration tests for...
-3. Performance benchmarks for...
+1. Unit tests for all core functionality
+2. Integration tests for system interactions
+3. Performance tests for response times
+4. Security testing for data protection
+5. Usability testing with target users
+
+## Open Questions and Risks
+1. Are there any specific performance benchmarks to meet?
+2. What are the expected user load and scalability requirements?
+3. Are there any specific security compliance requirements?
+4. What are the target platforms and devices?
 """
-        return criteria_template
+            return criteria
+            
+        except Exception as e:
+            raise ValueError(f"Failed to generate acceptance criteria: {str(e)}")
+    
+    def _format_requirements(self, requirements: list) -> str:
+        """Format requirements into acceptance criteria format.
+        
+        Args:
+            requirements: List of requirement strings
+            
+        Returns:
+            Formatted requirements string
+        """
+        formatted = []
+        for req in requirements:
+            # Clean up the requirement text
+            req = req.strip()
+            if req.startswith(("1.", "2.", "3.", "4.", "5.")):
+                req = req[2:].strip()
+            if req:
+                formatted.append(f"- {req}")
+        
+        return "\n".join(formatted) if formatted else "- No specific requirements provided"
     
     async def _validate_criteria_structure(self, criteria: str) -> bool:
         """Validate the structure of generated criteria.
@@ -123,13 +183,27 @@ class AnalysisAgent(BaseSDLCAgent):
         Returns:
             True if structure is valid, False otherwise
         """
-        # TODO: Implement actual validation logic
         required_sections = [
             "# Acceptance Criteria",
-            "## Requirements Overview",
-            "## Functional Criteria",
-            "## Non-Functional Criteria",
+            "## User Story",
+            "## Functional Acceptance Criteria",
+            "## Non-Functional Acceptance Criteria",
             "## Validation Methods"
         ]
         
-        return all(section in criteria for section in required_sections) 
+        required_patterns = [
+            "Given",
+            "When",
+            "Then"
+        ]
+        
+        # Check for required sections
+        if not all(section in criteria for section in required_sections):
+            return False
+            
+        # Check for required patterns in functional criteria
+        functional_section = criteria.split("## Functional Acceptance Criteria")[1].split("##")[0]
+        if not all(pattern in functional_section for pattern in required_patterns):
+            return False
+            
+        return True 
